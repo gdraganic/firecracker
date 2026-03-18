@@ -359,6 +359,7 @@ pub fn build_microvm_for_boot(
         uffd: None,
         vcpus_handles: Vec::new(),
         vcpus_exit_evt,
+        vcpu_seccomp_filter: Arc::new(vec![]),
         device_manager,
     };
     let vmm = Arc::new(Mutex::new(vmm));
@@ -561,6 +562,7 @@ pub fn build_microvm_from_snapshot(
         uffd,
         vcpus_handles: Vec::new(),
         vcpus_exit_evt,
+        vcpu_seccomp_filter: Arc::new(vec![]),
         device_manager,
     };
 
@@ -910,6 +912,7 @@ pub(crate) mod tests {
             uffd: None,
             vcpus_handles: Vec::new(),
             vcpus_exit_evt,
+            vcpu_seccomp_filter: Arc::new(vec![]),
             device_manager: default_device_manager(),
         }
     }

@@ -675,6 +675,51 @@ paths:
           schema:
             $ref: "#/definitions/Error"
 
+  /hotplug/cpu:
+    put:
+      summary: Configures CPU hotplug parameters. Pre-boot only.
+      operationId: putCpuHotplug
+      description:
+        Configure the maximum number of vCPUs that can be hot-plugged at runtime.
+        Must be called before the microVM is started. The boot vCPU count is set
+        via machine-config; this endpoint sets the upper bound for runtime scaling.
+      parameters:
+        - name: body
+          in: body
+          description: CPU hotplug configuration
+          required: true
+          schema:
+            $ref: "#/definitions/CpuHotplugConfig"
+      responses:
+        204:
+          description: CPU hotplug configured
+        default:
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+    patch:
+      summary: Updates the number of active vCPUs
+      operationId: patchCpuHotplug
+      description:
+        Adjusts the number of active vCPUs at runtime. If desired_vcpus is greater
+        than the current count, new vCPUs are hot-added via ACPI notification. If
+        lower, vCPUs are hot-removed (the guest is notified to offline them). Cannot
+        go below the boot vCPU count or above the configured max_vcpus.
+      parameters:
+        - name: body
+          in: body
+          description: Desired vCPU count update
+          required: true
+          schema:
+            $ref: "#/definitions/CpuHotplugUpdate"
+      responses:
+        204:
+          description: vCPU count updated
+        default:
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+
   /network-interfaces/{iface_id}:
     put:
       summary: Creates a network interface. Pre-boot only.
@@ -1286,6 +1331,8 @@ definitions:
         $ref: "#/definitions/Metrics"
       memory-hotplug:
         $ref: "#/definitions/MemoryHotplugConfig"
+      cpu-hotplug:
+        $ref: "#/definitions/CpuHotplugConfig"
       mmds-config:
         $ref: "#/definitions/MmdsConfig"
       network-interfaces:
@@ -1763,6 +1810,34 @@ definitions:
       requested_size_mib:
         type: integer
         description: Requested size for the hotpluggable memory in MiB.
+
+  CpuHotplugConfig:
+    type: object
+    description:
+      Pre-boot configuration for CPU hotplug. Sets the maximum number of vCPUs
+      that can exist at runtime (boot vCPUs + hotpluggable slots).
+    required:
+      - max_vcpus
+    properties:
+      max_vcpus:
+        type: integer
+        minimum: 1
+        maximum: 32
+        description: Maximum number of vCPUs (must be greater than boot vcpu_count and at most 32).
+
+  CpuHotplugUpdate:
+    type: object
+    description:
+      Runtime update to the active vCPU count. Triggers ACPI-based hot-add or
+      hot-remove depending on direction.
+    required:
+      - desired_vcpus
+    properties:
+      desired_vcpus:
+        type: integer
+        minimum: 1
+        maximum: 32
+        description: Desired number of active vCPUs. Must be between boot vcpu_count and max_vcpus.
 
   FirecrackerVersion:
     type: object

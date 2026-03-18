@@ -210,6 +210,8 @@ def validate_fc_metrics(metrics):
             "mmds_fails",
             "hotplug_memory_count",
             "hotplug_memory_fails",
+            "hotplug_cpu_count",
+            "hotplug_cpu_fails",
         ],
         "put_api_requests": [
             "actions_count",
@@ -238,6 +240,8 @@ def validate_fc_metrics(metrics):
             "serial_fails",
             "hotplug_memory_count",
             "hotplug_memory_fails",
+            "hotplug_cpu_count",
+            "hotplug_cpu_fails",
         ],
         "seccomp": [
             "num_faults",

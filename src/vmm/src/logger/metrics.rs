@@ -432,6 +432,8 @@ pub struct PutRequestsMetrics {
     pub hotplug_memory_count: SharedIncMetric,
     /// Number of failed PUTs to /hotplug/memory
     pub hotplug_memory_fails: SharedIncMetric,
+    pub hotplug_cpu_count: SharedIncMetric,
+    pub hotplug_cpu_fails: SharedIncMetric,
 }
 impl PutRequestsMetrics {
     /// Const default construction.
@@ -463,6 +465,8 @@ impl PutRequestsMetrics {
             serial_fails: SharedIncMetric::new(),
             hotplug_memory_count: SharedIncMetric::new(),
             hotplug_memory_fails: SharedIncMetric::new(),
+            hotplug_cpu_count: SharedIncMetric::new(),
+            hotplug_cpu_fails: SharedIncMetric::new(),
         }
     }
 }
@@ -490,6 +494,8 @@ pub struct PatchRequestsMetrics {
     pub hotplug_memory_count: SharedIncMetric,
     /// Number of failed PATCHes to /hotplug/memory
     pub hotplug_memory_fails: SharedIncMetric,
+    pub hotplug_cpu_count: SharedIncMetric,
+    pub hotplug_cpu_fails: SharedIncMetric,
 }
 impl PatchRequestsMetrics {
     /// Const default construction.
@@ -505,6 +511,8 @@ impl PatchRequestsMetrics {
             mmds_fails: SharedIncMetric::new(),
             hotplug_memory_count: SharedIncMetric::new(),
             hotplug_memory_fails: SharedIncMetric::new(),
+            hotplug_cpu_count: SharedIncMetric::new(),
+            hotplug_cpu_fails: SharedIncMetric::new(),
         }
     }
 }

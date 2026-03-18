@@ -330,6 +330,7 @@ pub struct Vmm {
     pub vcpus_handles: Vec<VcpuHandle>,
     // Used by Vcpus and devices to initiate teardown; Vmm should never write here.
     vcpus_exit_evt: EventFd,
+    vcpu_seccomp_filter: Arc<BpfProgram>,
     // Device manager
     device_manager: DeviceManager,
 }
@@ -480,6 +481,7 @@ impl Vmm {
         mut vcpus: Vec<Vcpu>,
         vcpu_seccomp_filter: Arc<BpfProgram>,
     ) -> Result<(), StartVcpusError> {
+        self.vcpu_seccomp_filter = vcpu_seccomp_filter.clone();
         let vcpu_count = vcpus.len();
         let barrier = Arc::new(Barrier::new(vcpu_count + 1));
 
@@ -750,6 +752,7 @@ impl Vmm {
         Ok(())
     }
 
+    /// Hotplugs or unplugs vCPUs to reach the desired vCPU count.
     pub fn hotplug_vcpus(&mut self, desired_vcpus: u8) -> Result<(), VmmError> {
         let active_vcpus = self.machine_config.vcpu_count;
         let total_handles = self.vcpus_handles.len() as u8;
