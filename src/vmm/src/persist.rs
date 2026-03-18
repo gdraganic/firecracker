@@ -430,6 +430,12 @@ pub fn restore_from_snapshot(
         })
         .map_err(BuildMicrovmFromSnapshotError::VmUpdateConfig)?;
 
+    if let Some(hp_state) = &microvm_state.device_states.acpi_state.cpu_hotplug {
+        vm_resources.cpu_hotplug = Some(crate::vmm_config::cpu_hotplug::CpuHotplugConfig {
+            max_vcpus: hp_state.max_vcpus,
+        });
+    }
+
     // Some sanity checks before building the microvm.
     snapshot_state_sanity_check(&microvm_state)?;
 

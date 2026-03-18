@@ -15,6 +15,7 @@ use super::mmio::*;
 use crate::arch::DeviceType;
 use crate::device_manager::DevicePersistError;
 use crate::device_manager::acpi::ACPIDeviceError;
+use crate::devices::acpi::cpu_hotplug::{CPU_HOTPLUG_MMIO_SIZE, CpuHotplugController, CpuHotplugControllerState};
 use crate::devices::acpi::vmclock::{VmClock, VmClockState};
 use crate::devices::acpi::vmgenid::{VMGenIDState, VmGenId};
 #[cfg(target_arch = "aarch64")]
@@ -122,6 +123,8 @@ impl fmt::Debug for MMIODevManagerConstructorArgs<'_> {
 pub struct ACPIDeviceManagerState {
     vmgenid: VMGenIDState,
     vmclock: VmClockState,
+    #[serde(default)]
+    pub cpu_hotplug: Option<CpuHotplugControllerState>,
 }
 
 impl<'a> Persist<'a> for ACPIDeviceManager {
@@ -133,16 +136,23 @@ impl<'a> Persist<'a> for ACPIDeviceManager {
         ACPIDeviceManagerState {
             vmgenid: self.vmgenid().save(),
             vmclock: self.vmclock().save(),
+            cpu_hotplug: self
+                .cpu_hotplug()
+                .map(|arc| arc.lock().expect("Poisoned lock").save()),
         }
     }
 
     fn restore(vm: Self::ConstructorArgs, state: &Self::State) -> Result<Self, Self::Error> {
+        let cpu_hotplug_arc = state.cpu_hotplug.as_ref().map(|hp_state| {
+            let controller = CpuHotplugController::restore(hp_state)
+                .expect("Failed to restore CPU hotplug controller");
+            Arc::new(Mutex::new(controller))
+        });
+
         let mut acpi_devices = ACPIDeviceManager::new(
-            // Safe to unwrap() here, this will never return an error.
             VmGenId::restore((), &state.vmgenid).unwrap(),
-            // Safe to unwrap() here, this will never return an error.
             VmClock::restore((), &state.vmclock).unwrap(),
-            None,
+            cpu_hotplug_arc.clone(),
         );
 
         acpi_devices.activate_vmgenid(vm)?;
@@ -150,6 +160,21 @@ impl<'a> Persist<'a> for ACPIDeviceManager {
 
         acpi_devices.activate_vmclock(vm)?;
         acpi_devices.do_post_restore_vmclock(vm.guest_memory())?;
+
+        if let Some(cpu_hp_arc) = cpu_hotplug_arc {
+            acpi_devices.activate_cpu_hotplug(vm)?;
+            let ctrl = cpu_hp_arc.lock().expect("Poisoned lock");
+            let mmio_addr = ctrl.mmio_addr();
+            drop(ctrl);
+            vm.common
+                .mmio_bus
+                .insert(
+                    cpu_hp_arc as Arc<dyn crate::vstate::bus::BusDeviceSync>,
+                    mmio_addr,
+                    CPU_HOTPLUG_MMIO_SIZE,
+                )
+                .map_err(|_| ACPIDeviceError::RegisterIrq(kvm_ioctls::Error::new(libc::ENOMEM)))?;
+        }
 
         Ok(acpi_devices)
     }
