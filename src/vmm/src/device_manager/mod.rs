@@ -616,6 +616,7 @@ pub(crate) mod tests {
         let acpi_devices = ACPIDeviceManager::new(
             VmGenId::new(&mut resource_allocator).unwrap(),
             VmClock::new(&mut resource_allocator).unwrap(),
+            None,
         );
         let pci_devices = PciDevices::new();
 

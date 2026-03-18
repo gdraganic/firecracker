@@ -24,6 +24,7 @@ use crate::vmm_config::drive::*;
 use crate::vmm_config::entropy::*;
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::{MachineConfig, MachineConfigError, MachineConfigUpdate};
+use crate::vmm_config::cpu_hotplug::CpuHotplugConfig;
 use crate::vmm_config::memory_hotplug::{MemoryHotplugConfig, MemoryHotplugConfigError};
 use crate::vmm_config::metrics::{MetricsConfig, MetricsConfigError, init_metrics};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
@@ -99,6 +100,7 @@ pub struct VmmConfig {
     #[serde(skip)]
     pub serial_config: Option<SerialConfig>,
     pub memory_hotplug: Option<MemoryHotplugConfig>,
+    pub cpu_hotplug: Option<CpuHotplugConfig>,
 }
 
 /// A data structure that encapsulates the device configurations
@@ -123,6 +125,8 @@ pub struct VmResources {
     pub pmem: PmemBuilder,
     /// The memory hotplug configuration.
     pub memory_hotplug: Option<MemoryHotplugConfig>,
+    /// CPU hotplug configuration
+    pub cpu_hotplug: Option<CpuHotplugConfig>,
     /// The optional Mmds data store.
     // This is initialised on demand (if ever used), so that we don't allocate it unless it's
     // actually used.
@@ -223,6 +227,8 @@ impl VmResources {
         if let Some(memory_hotplug_config) = vmm_config.memory_hotplug {
             resources.set_memory_hotplug_config(memory_hotplug_config)?;
         }
+
+        resources.cpu_hotplug = vmm_config.cpu_hotplug;
 
         Ok(resources)
     }
@@ -538,6 +544,7 @@ impl From<&VmResources> for VmmConfig {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots.
             serial_config: None,
             memory_hotplug: resources.memory_hotplug.clone(),
+            cpu_hotplug: resources.cpu_hotplug.clone(),
         }
     }
 }
@@ -652,6 +659,7 @@ mod tests {
             pci_enabled: false,
             serial_out_path: None,
             memory_hotplug: Default::default(),
+            cpu_hotplug: Default::default(),
         }
     }
 

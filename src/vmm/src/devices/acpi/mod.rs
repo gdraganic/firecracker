@@ -2,5 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod generated;
+pub mod cpu_hotplug;
 pub mod vmclock;
 pub mod vmgenid;

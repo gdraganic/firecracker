@@ -155,6 +155,7 @@ use crate::rate_limiter::BucketUpdate;
 use crate::resources::VmmConfig;
 use crate::vmm_config::balloon::BalloonDeviceConfig;
 use crate::vmm_config::boot_source::BootSourceConfig;
+use crate::vmm_config::cpu_hotplug::CpuHotplugConfig;
 use crate::vmm_config::entropy::EntropyDeviceConfig;
 use crate::vmm_config::instance_info::{InstanceInfo, VmState};
 use crate::vmm_config::machine_config::MachineConfig;
@@ -233,6 +234,8 @@ pub enum VmmError {
     LegacyIOBus(device_manager::legacy::LegacyDeviceError),
     /// Metrics error: {0}
     Metrics(MetricsError),
+    /// Operation not allowed: {0}
+    NotAllowed(String),
     /// Cannot add a device to the MMIO Bus. {0}
     RegisterMMIODevice(device_manager::mmio::MmioError),
     /// Cannot install seccomp filters: {0}
@@ -431,6 +434,16 @@ impl Vmm {
                 imds_compat: mmds.imds_compat(),
             }
         });
+        let cpu_hotplug = self
+            .device_manager
+            .acpi_devices
+            .cpu_hotplug()
+            .map(|arc| {
+                let c = arc.lock().expect("Poisoned lock");
+                CpuHotplugConfig {
+                    max_vcpus: c.max_vcpus(),
+                }
+            });
 
         // This must match the From<&VmResources> for VmmConfig implementation
         // in resources.rs which is used to retrieve the config before the VM
@@ -451,6 +464,7 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
+            cpu_hotplug,
         }
     }
 
@@ -592,16 +606,17 @@ impl Vmm {
     }
 
     fn save_vcpu_states(&mut self) -> Result<Vec<VcpuState>, MicrovmStateError> {
-        for handle in self.vcpus_handles.iter_mut() {
+        let active_count = self.machine_config.vcpu_count as usize;
+        let active_handles = &mut self.vcpus_handles[..active_count];
+
+        for handle in active_handles.iter_mut() {
             handle
                 .send_event(VcpuEvent::SaveState)
                 .map_err(MicrovmStateError::SignalVcpu)?;
         }
 
-        let vcpu_responses = self
-            .vcpus_handles
+        let vcpu_responses = active_handles
             .iter()
-            // `Iterator::collect` can transform a `Vec<Result>` into a `Result<Vec>`.
             .map(|handle| handle.response_receiver().recv_timeout(RECV_TIMEOUT_SEC))
             .collect::<Result<Vec<VcpuResponse>, RecvTimeoutError>>()
             .map_err(|_| MicrovmStateError::UnexpectedVcpuResponse)?;
@@ -732,6 +747,168 @@ impl Vmm {
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| {
                 dev.update_stats_polling_interval(stats_polling_interval_s)
             })??;
+        Ok(())
+    }
+
+    pub fn hotplug_vcpus(&mut self, desired_vcpus: u8) -> Result<(), VmmError> {
+        let active_vcpus = self.machine_config.vcpu_count;
+        let total_handles = self.vcpus_handles.len() as u8;
+
+        if desired_vcpus == active_vcpus {
+            return Ok(());
+        }
+
+        let max_vcpus = self
+            .device_manager
+            .acpi_devices
+            .cpu_hotplug()
+            .map(|arc| arc.lock().expect("Poisoned lock").max_vcpus())
+            .unwrap_or(active_vcpus);
+
+        let boot_vcpus = self
+            .device_manager
+            .acpi_devices
+            .cpu_hotplug()
+            .map(|arc| arc.lock().expect("Poisoned lock").boot_vcpus())
+            .unwrap_or(active_vcpus);
+
+        if desired_vcpus > max_vcpus {
+            return Err(VmmError::NotAllowed(format!(
+                "Desired vCPU count ({desired_vcpus}) exceeds max ({max_vcpus})"
+            )));
+        }
+
+        if desired_vcpus < boot_vcpus {
+            return Err(VmmError::NotAllowed(format!(
+                "Cannot reduce below boot vCPU count ({boot_vcpus})"
+            )));
+        }
+
+        if desired_vcpus > active_vcpus {
+            let should_resume = self.instance_info.state == VmState::Running;
+
+            // Phase 1: Resume paused vCPU threads that already exist
+            for idx in active_vcpus..desired_vcpus.min(total_handles) {
+                let handle = &mut self.vcpus_handles[idx as usize];
+                if should_resume {
+                    handle
+                        .send_event(VcpuEvent::Resume)
+                        .map_err(|_| VmmError::VcpuMessage)?;
+                    if !matches!(
+                        handle.response_receiver().recv_timeout(RECV_TIMEOUT_SEC),
+                        Ok(VcpuResponse::Resumed)
+                    ) {
+                        return Err(VmmError::VcpuMessage);
+                    }
+                }
+            }
+
+            // Phase 2: Create new vCPU threads for indices beyond total_handles
+            let mut new_handles = Vec::new();
+            for cpu_idx in total_handles..desired_vcpus {
+                let mut vcpu = Vcpu::new(
+                    cpu_idx,
+                    &self.vm,
+                    self.vcpus_exit_evt.try_clone().map_err(VmmError::VcpuSpawn)?,
+                )
+                .map_err(VmmError::VcpuCreate)?;
+
+                vcpu.set_mmio_bus(self.vm.common.mmio_bus.clone());
+                #[cfg(target_arch = "x86_64")]
+                vcpu.kvm_vcpu.set_pio_bus(self.vm.pio_bus.clone());
+
+                // Hotplugged vCPUs need CPUID configured so KVM assigns
+                // the correct APIC ID for INIT/SIPI delivery.
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let mut cpuid =
+                        crate::cpu_config::x86_64::cpuid::Cpuid::try_from(
+                            self.kvm.supported_cpuid.clone(),
+                        )
+                        .map_err(|e| VmmError::NotAllowed(
+                            format!("Failed to create CPUID for hotplugged vCPU: {e}"),
+                        ))?;
+                    cpuid.normalize(
+                        cpu_idx,
+                        max_vcpus,
+                        u8::from(max_vcpus > 1 && self.machine_config.smt),
+                    ).map_err(|e| VmmError::NotAllowed(
+                        format!("Failed to normalize CPUID for hotplugged vCPU: {e}"),
+                    ))?;
+                    let kvm_cpuid = kvm_bindings::CpuId::try_from(cpuid)
+                        .map_err(|e| VmmError::NotAllowed(
+                            format!("Failed to convert CPUID for hotplugged vCPU: {e}"),
+                        ))?;
+                    vcpu.kvm_vcpu.fd.set_cpuid2(&kvm_cpuid)
+                        .map_err(|e| VmmError::NotAllowed(
+                            format!("Failed to set CPUID for hotplugged vCPU: {e}"),
+                        ))?;
+                    crate::arch::x86_64::interrupts::set_lint(&vcpu.kvm_vcpu.fd)
+                        .map_err(|e| VmmError::NotAllowed(
+                            format!("Failed to set LAPIC LINT for hotplugged vCPU: {e}"),
+                        ))?;
+                }
+
+                let barrier = Arc::new(Barrier::new(2));
+                let seccomp_filter = self.vcpu_seccomp_filter.clone();
+                let handle = vcpu
+                    .start_threaded(&self.vm, seccomp_filter, barrier.clone())
+                    .map_err(|err| VmmError::VcpuStart(StartVcpusError::VcpuHandle(err)))?;
+                barrier.wait();
+
+                new_handles.push(handle);
+            }
+
+            self.vcpus_handles.append(&mut new_handles);
+            self.machine_config.vcpu_count = desired_vcpus;
+
+            // Notify guest BEFORE resuming vCPU threads. The guest kernel
+            // will send INIT/SIPI which KVM queues in each target LAPIC.
+            // When we Resume below, KVM_RUN processes the pending SIPI
+            // and the vCPU starts at the kernel's entry point.
+            if let Some(cpu_hotplug_arc) = self.device_manager.acpi_devices.cpu_hotplug() {
+                let mut cpu_hotplug = cpu_hotplug_arc.lock().expect("Poisoned lock");
+                cpu_hotplug.hotplug_vcpus(active_vcpus, desired_vcpus);
+                cpu_hotplug.notify_guest();
+            }
+
+            for idx in total_handles..desired_vcpus {
+                if let Some(handle) = self.vcpus_handles.get_mut(idx as usize) {
+                    handle
+                        .send_event(VcpuEvent::Resume)
+                        .map_err(|_| VmmError::VcpuMessage)?;
+                    if !matches!(
+                        handle.response_receiver().recv_timeout(RECV_TIMEOUT_SEC),
+                        Ok(VcpuResponse::Resumed)
+                    ) {
+                        return Err(VmmError::VcpuMessage);
+                    }
+                }
+            }
+
+            info!("Hotplugged vCPUs from {} to {}", active_vcpus, desired_vcpus);
+        } else {
+            // Hot-remove path: desired < active
+            if let Some(cpu_hp_arc) = self.device_manager.acpi_devices.cpu_hotplug() {
+                let mut cpu_hp = cpu_hp_arc.lock().expect("Poisoned lock");
+                cpu_hp.unplug_vcpus(desired_vcpus);
+                cpu_hp.notify_guest();
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            // Pause the removed vCPU threads (don't destroy — KVM vCPUs can't be re-created)
+            for idx in desired_vcpus..active_vcpus {
+                if let Some(handle) = self.vcpus_handles.get_mut(idx as usize) {
+                    let _ = handle.send_event(VcpuEvent::Pause);
+                    let _ = handle.response_receiver().recv_timeout(RECV_TIMEOUT_SEC);
+                }
+            }
+
+            self.machine_config.vcpu_count = desired_vcpus;
+            info!("Unplugged vCPUs from {} to {}", active_vcpus, desired_vcpus);
+        }
+
         Ok(())
     }
 

@@ -13,13 +13,16 @@ use crate::arch::x86_64::layout;
 use crate::device_manager::legacy::PortIODeviceManager;
 
 #[inline(always)]
-pub(crate) fn setup_interrupt_controllers(nr_vcpus: u8) -> Vec<u8> {
+pub(crate) fn setup_interrupt_controllers(boot_vcpus: u8, max_vcpus: u8) -> Vec<u8> {
     let mut ic =
-        Vec::with_capacity(size_of::<IoAPIC>() + (nr_vcpus as usize) * size_of::<LocalAPIC>());
+        Vec::with_capacity(size_of::<IoAPIC>() + (max_vcpus as usize) * size_of::<LocalAPIC>());
 
     ic.extend_from_slice(IoAPIC::new(0, layout::IOAPIC_ADDR).as_bytes());
-    for i in 0..nr_vcpus {
+    for i in 0..boot_vcpus {
         ic.extend_from_slice(LocalAPIC::new(i).as_bytes());
+    }
+    for i in boot_vcpus..max_vcpus {
+        ic.extend_from_slice(LocalAPIC::new_online_capable(i).as_bytes());
     }
     ic
 }

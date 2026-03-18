@@ -183,6 +183,7 @@ pub fn configure_system_for_boot(
     entry_point: EntryPoint,
     initrd: &Option<InitrdConfig>,
     boot_cmdline: Cmdline,
+    max_vcpus: u8,
 ) -> Result<(), ConfigurationError> {
     // Construct the base CpuConfiguration to apply CPU template onto.
     let cpu_config = CpuConfiguration::new(kvm.supported_cpuid.clone(), cpu_template, &vcpus[0])?;
@@ -244,6 +245,7 @@ pub fn configure_system_for_boot(
         device_manager,
         &mut vm.resource_allocator(),
         vcpus,
+        max_vcpus,
     )?;
     Ok(())
 }

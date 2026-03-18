@@ -28,6 +28,7 @@ use super::request::pmem::parse_put_pmem;
 use super::request::snapshot::{parse_patch_vm_state, parse_put_snapshot};
 use super::request::version::parse_get_version;
 use super::request::vsock::parse_put_vsock;
+use crate::api_server::request::hotplug::cpu::{parse_patch_cpu_hotplug, parse_put_cpu_hotplug};
 use crate::api_server::request::hotplug::memory::{
     parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug,
 };
@@ -109,9 +110,11 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, "snapshot", Some(body)) => parse_put_snapshot(body, path_tokens.next()),
             (Method::Put, "vsock", Some(body)) => parse_put_vsock(body),
             (Method::Put, "entropy", Some(body)) => parse_put_entropy(body),
-            (Method::Put, "hotplug", Some(body)) if path_tokens.next() == Some("memory") => {
-                parse_put_memory_hotplug(body)
-            }
+            (Method::Put, "hotplug", Some(body)) => match path_tokens.next() {
+                Some("memory") => parse_put_memory_hotplug(body),
+                Some("cpu") => parse_put_cpu_hotplug(body),
+                _ => Err(RequestError::InvalidPathMethod("hotplug".to_string(), Method::Put)),
+            },
             (Method::Put, _, None) => method_to_error(Method::Put),
             (Method::Patch, "balloon", body) => parse_patch_balloon(body, path_tokens),
             (Method::Patch, "drives", Some(body)) => parse_patch_drive(body, path_tokens.next()),
@@ -121,9 +124,11 @@ impl TryFrom<&Request> for ParsedRequest {
                 parse_patch_net(body, path_tokens.next())
             }
             (Method::Patch, "vm", Some(body)) => parse_patch_vm_state(body),
-            (Method::Patch, "hotplug", Some(body)) if path_tokens.next() == Some("memory") => {
-                parse_patch_memory_hotplug(body)
-            }
+            (Method::Patch, "hotplug", Some(body)) => match path_tokens.next() {
+                Some("cpu") => parse_patch_cpu_hotplug(body),
+                Some("memory") => parse_patch_memory_hotplug(body),
+                _ => Err(RequestError::InvalidPathMethod("hotplug".to_string(), Method::Patch)),
+            },
             (Method::Patch, _, None) => method_to_error(Method::Patch),
             (method, unknown_uri, _) => Err(RequestError::InvalidPathMethod(
                 unknown_uri.to_string(),

@@ -30,6 +30,7 @@ use crate::vmm_config::drive::{BlockDeviceConfig, BlockDeviceUpdateConfig, Drive
 use crate::vmm_config::entropy::{EntropyDeviceConfig, EntropyDeviceError};
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::{MachineConfig, MachineConfigError, MachineConfigUpdate};
+use crate::vmm_config::cpu_hotplug::{CpuHotplugConfig, CpuHotplugUpdate};
 use crate::vmm_config::memory_hotplug::{
     MemoryHotplugConfig, MemoryHotplugConfigError, MemoryHotplugSizeUpdate,
 };
@@ -122,6 +123,8 @@ pub enum VmmAction {
     /// Updates the memory hotplug device using `MemoryHotplugConfigUpdate` as input. This action
     /// can only be called after the microVM has booted.
     UpdateMemoryHotplugSize(MemoryHotplugSizeUpdate),
+    SetCpuHotplugConfig(CpuHotplugConfig),
+    HotplugVcpu(CpuHotplugUpdate),
     /// Launch the microVM. This action can only be called before the microVM has booted.
     StartMicroVm,
     /// Send CTRL+ALT+DEL to the microVM, using the i8042 keyboard function. If an AT-keyboard
@@ -171,6 +174,8 @@ pub enum VmmActionError {
     MemoryHotplugConfig(#[from] MemoryHotplugConfigError),
     /// Memory hotplug update error: {0}
     MemoryHotplugUpdate(VmmError),
+    /// CPU hotplug error: {0}
+    CpuHotplug(VmmError),
     /// Internal VMM error: {0}
     InternalVmm(#[from] VmmError),
     /// Load snapshot error: {0}
@@ -481,6 +486,10 @@ impl<'a> PrebootApiController<'a> {
             UpdateMachineConfiguration(config) => self.update_machine_config(config),
             SetEntropyDevice(config) => self.set_entropy_device(config),
             SetMemoryHotplugDevice(config) => self.set_memory_hotplug_device(config),
+            SetCpuHotplugConfig(config) => {
+                self.vm_resources.cpu_hotplug = Some(config);
+                Ok(VmmData::Empty)
+            }
             // Operations not allowed pre-boot.
             CreateSnapshot(_)
             | FlushMetrics
@@ -492,6 +501,7 @@ impl<'a> PrebootApiController<'a> {
             | UpdateBalloonStatistics(_)
             | UpdateBlockDevice(_)
             | UpdateMemoryHotplugSize(_)
+            | HotplugVcpu(_)
             | UpdateNetworkInterface(_)
             | StartFreePageHinting(_)
             | GetFreePageHintingStatus
@@ -786,6 +796,13 @@ impl RuntimeApiController {
                 .stop_balloon_hinting()
                 .map(|_| VmmData::Empty)
                 .map_err(VmmActionError::BalloonUpdate),
+            HotplugVcpu(cfg) => self
+                .vmm
+                .lock()
+                .expect("Poisoned lock")
+                .hotplug_vcpus(cfg.desired_vcpus)
+                .map(|_| VmmData::Empty)
+                .map_err(VmmActionError::CpuHotplug),
             UpdateBlockDevice(new_cfg) => self.update_block_device(new_cfg),
             UpdateNetworkInterface(netif_update) => self.update_net_rate_limiters(netif_update),
             UpdateMemoryHotplugSize(cfg) => self
@@ -810,6 +827,7 @@ impl RuntimeApiController {
             | SetMmdsConfiguration(_)
             | SetEntropyDevice(_)
             | SetMemoryHotplugDevice(_)
+            | SetCpuHotplugConfig(_)
             | StartMicroVm
             | UpdateMachineConfiguration(_) => Err(VmmActionError::OperationNotSupportedPostBoot),
         }

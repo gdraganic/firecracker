@@ -142,6 +142,7 @@ impl<'a> Persist<'a> for ACPIDeviceManager {
             VmGenId::restore((), &state.vmgenid).unwrap(),
             // Safe to unwrap() here, this will never return an error.
             VmClock::restore((), &state.vmclock).unwrap(),
+            None,
         );
 
         acpi_devices.activate_vmgenid(vm)?;

@@ -130,14 +130,15 @@ impl AcpiTableWriter<'_> {
     fn build_madt(
         &mut self,
         resource_allocator: &mut ResourceAllocator,
-        nr_vcpus: u8,
+        boot_vcpus: u8,
+        max_vcpus: u8,
     ) -> Result<u64, AcpiError> {
         let mut madt = Madt::new(
             OEM_ID,
             *b"FCVMMADT",
             OEM_REVISION,
             apic_addr(),
-            setup_interrupt_controllers(nr_vcpus),
+            setup_interrupt_controllers(boot_vcpus, max_vcpus),
         );
         self.write_acpi_table(resource_allocator, &mut madt)
     }
@@ -199,12 +200,17 @@ pub(crate) fn create_acpi_tables(
     device_manager: &mut DeviceManager,
     resource_allocator: &mut ResourceAllocator,
     vcpus: &[Vcpu],
+    max_vcpus: u8,
 ) -> Result<(), AcpiError> {
     let mut writer = AcpiTableWriter { mem };
     let dsdt_addr = writer.build_dsdt(device_manager, resource_allocator)?;
 
     let fadt_addr = writer.build_fadt(resource_allocator, dsdt_addr)?;
-    let madt_addr = writer.build_madt(resource_allocator, vcpus.len().try_into().unwrap())?;
+    let madt_addr = writer.build_madt(
+        resource_allocator,
+        vcpus.len().try_into().unwrap(),
+        max_vcpus,
+    )?;
     let mcfg_addr = writer.build_mcfg(resource_allocator, layout::PCI_MMCONFIG_START)?;
     let xsdt_addr = writer.build_xsdt(resource_allocator, fadt_addr, madt_addr, mcfg_addr)?;
     writer.build_rsdp(xsdt_addr)

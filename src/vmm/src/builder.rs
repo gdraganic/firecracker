@@ -290,12 +290,51 @@ pub fn build_microvm_for_boot(
     device_manager.attach_vmgenid_device(&vm)?;
     device_manager.attach_vmclock_device(&vm)?;
 
+    if let Some(cpu_hotplug_config) = &vm_resources.cpu_hotplug {
+        let cpu_hp_arc = device_manager
+            .acpi_devices
+            .attach_cpu_hotplug(
+                vm_resources.machine_config.vcpu_count,
+                cpu_hotplug_config.max_vcpus,
+                &vm,
+            )
+            .map_err(|e| StartMicrovmError::Internal(crate::VmmError::NotAllowed(
+                format!("Failed to attach CPU hotplug controller: {e}"),
+            )))?;
+        device_manager
+            .acpi_devices
+            .activate_cpu_hotplug(&vm)
+            .map_err(|e| StartMicrovmError::Internal(crate::VmmError::NotAllowed(
+                format!("Failed to activate CPU hotplug controller: {e}"),
+            )))?;
+        {
+            let ctrl = cpu_hp_arc.lock().expect("Poisoned lock");
+            let mmio_addr = ctrl.mmio_addr();
+            drop(ctrl);
+            vm.common.mmio_bus
+                .insert(
+                    cpu_hp_arc as std::sync::Arc<dyn crate::vstate::bus::BusDeviceSync>,
+                    mmio_addr,
+                    crate::devices::acpi::cpu_hotplug::CPU_HOTPLUG_MMIO_SIZE,
+                )
+                .map_err(|e| StartMicrovmError::Internal(crate::VmmError::NotAllowed(
+                    format!("Failed to register CPU hotplug on MMIO bus: {e}"),
+                )))?;
+        }
+        boot_cmdline.insert("nr_cpus", &cpu_hotplug_config.max_vcpus.to_string())?;
+    }
+
     #[cfg(target_arch = "aarch64")]
     if vcpus[0].kvm_vcpu.supports_pvtime() {
         setup_pvtime(&mut vm.resource_allocator(), &mut vcpus)?;
     } else {
         log::warn!("Vcpus do not support pvtime, steal time will not be reported to guest");
     }
+
+    let max_vcpus = vm_resources
+        .cpu_hotplug
+        .as_ref()
+        .map_or(vm_resources.machine_config.vcpu_count, |c| c.max_vcpus);
 
     configure_system_for_boot(
         &kvm,
@@ -307,6 +346,7 @@ pub fn build_microvm_for_boot(
         entry_point,
         &initrd,
         boot_cmdline,
+        max_vcpus,
     )?;
 
     let vmm = Vmm {

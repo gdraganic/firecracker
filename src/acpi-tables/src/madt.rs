@@ -12,6 +12,7 @@ use zerocopy::{Immutable, IntoBytes};
 use crate::{AcpiError, Result, Sdt, SdtHeader, checksum};
 
 const MADT_CPU_ENABLE_FLAG: u32 = 0;
+const MADT_CPU_ONLINE_CAPABLE_FLAG: u32 = 1;
 
 // clippy doesn't understand that we actually "use" the fields of this struct when we serialize
 // them as bytes in guest memory, so here we just ignore dead code to avoid having to name
@@ -35,6 +36,18 @@ impl LocalAPIC {
             processor_uid: cpu_id,
             apic_id: cpu_id,
             flags: U32::new(1u32 << MADT_CPU_ENABLE_FLAG),
+        }
+    }
+
+    /// Creates a LocalAPIC entry for a hotpluggable CPU slot.
+    /// The CPU is marked as not-enabled but online-capable (ACPI 6.3+).
+    pub fn new_online_capable(cpu_id: u8) -> Self {
+        Self {
+            r#type: 0,
+            length: 8,
+            processor_uid: cpu_id,
+            apic_id: cpu_id,
+            flags: U32::new(1u32 << MADT_CPU_ONLINE_CAPABLE_FLAG),
         }
     }
 }
